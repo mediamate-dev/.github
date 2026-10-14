@@ -31,11 +31,11 @@ permissions:
 jobs:
   merge:
     name: OK merge
-    # Kun på pull requests, og kun når kommentaren starter med "OK merge" (store/små
-    # bogstaver er ligegyldige). Den præcise tekst tjekkes i første trin.
+    # Kun på pull requests, og kun når kommentaren starter med "OK merge". startsWith()
+    # skelner ikke mellem store og små bogstaver. Den præcise tekst tjekkes i første trin.
     if: >-
       github.event.issue.pull_request &&
-      startsWith(lower(github.event.comment.body), 'ok merge')
+      startsWith(github.event.comment.body, 'ok merge')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
