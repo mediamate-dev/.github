@@ -1,0 +1,116 @@
+# "OK merge": merger en Dependabot-PR på en kommentar fra en godkender.
+#
+# Skriv en kommentar med præcis "OK merge" på en Dependabot-PR. Står du i repoets
+# variabel OK_MERGE_APPROVERS, og er alle checks grønne, merges PR'en, og deploy startes.
+#
+# Genbruges fra kunderepos med en lille workflow på issue_comment, se
+# standard/ok-merge.yml i dette repo.
+#
+# Hvorfor deploy startes her: en merge lavet med GITHUB_TOKEN starter ikke andre
+# workflows (GitHub forhindrer kæder). Derfor startes deploy-workflowen bagefter med
+# workflow_dispatch, som er den ene hændelse, GITHUB_TOKEN gerne må udløse.
+name: OK merge
+
+on:
+  workflow_call:
+    inputs:
+      approvers:
+        description: GitHub-brugere, der må skrive "OK merge", adskilt af mellemrum. Sendes fra repo-variablen OK_MERGE_APPROVERS
+        type: string
+        default: ''
+      deploy-workflow:
+        description: Deploy-workflowen, der startes efter merge (tom = ingen)
+        type: string
+        default: deploy.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  merge:
+    name: OK merge
+    # Kun på pull requests, og kun når kommentaren starter med "OK merge" (store/små
+    # bogstaver er ligegyldige). Den præcise tekst tjekkes i første trin.
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(lower(github.event.comment.body), 'ok merge')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.issue.number }}
+      COMMENTER: ${{ github.event.comment.user.login }}
+      BODY: ${{ github.event.comment.body }}
+      APPROVERS: ${{ inputs.approvers }}
+      DEPLOY_WORKFLOW: ${{ inputs.deploy-workflow }}
+    steps:
+      - name: Tjek godkender, afsender og checks
+        id: check
+        run: |
+          set -euo pipefail
+          reply() { gh pr comment "$PR" --body "$1"; }
+
+          # Hele kommentaren skal være "OK merge" (evt. med punktum), ikke fx "OK merge i morgen".
+          text=$(printf '%s' "$BODY" | tr '[:upper:]' '[:lower:]' | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//; s/[.!]$//')
+          if [ "$text" != "ok merge" ]; then
+            echo "Kommentaren er ikke præcis \"OK merge\". Intet gjort."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "${APPROVERS// /}" ]; then
+            reply "Repo-variablen OK_MERGE_APPROVERS er ikke sat, så ingen kan merge med \"OK merge\". Intet er merget."
+            exit 1
+          fi
+
+          if ! printf ' %s ' "$APPROVERS" | grep -q " $COMMENTER "; then
+            reply "@$COMMENTER er ikke på listen over dem, der må merge med \"OK merge\". Intet er merget."
+            exit 1
+          fi
+
+          author=$(gh pr view "$PR" --json author -q .author.login)
+          if [ "$author" != "app/dependabot" ] && [ "$author" != "dependabot[bot]" ] && [ "$author" != "dependabot" ]; then
+            reply "\"OK merge\" virker kun på Dependabot-PR'er. Denne er lavet af $author og skal merges på almindelig vis."
+            exit 1
+          fi
+
+          state=$(gh pr view "$PR" --json state -q .state)
+          if [ "$state" != "OPEN" ]; then
+            reply "PR'en er ikke åben ($state). Intet er merget."
+            exit 1
+          fi
+
+          # Exit-kode 0 = alle checks er grønne eller sprunget over, 8 = nogen kører stadig.
+          set +e
+          gh pr checks "$PR" > checks.txt
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            if [ "$status" -eq 8 ]; then why="Der kører stadig checks."; else why="Ikke alle checks er grønne."; fi
+            reply "$(printf '%s Intet er merget. Prøv igen, når de er grønne.\n\n```\n%s\n```' "$why" "$(cat checks.txt)")"
+            exit 1
+          fi
+
+          echo "sha=$(gh pr view "$PR" --json headRefOid -q .headRefOid)" >> "$GITHUB_OUTPUT"
+
+      - name: Merge
+        if: steps.check.outputs.skip != 'true'
+        env:
+          SHA: ${{ steps.check.outputs.sha }}
+        run: |
+          # --match-head-commit: har Dependabot skubbet nye ændringer siden kommentaren, afvises merge.
+          gh pr merge "$PR" --squash --delete-branch --match-head-commit "$SHA"
+
+      - name: Start deploy
+        if: steps.check.outputs.skip != 'true' && inputs.deploy-workflow != ''
+        run: |
+          branch=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
+          gh workflow run "$DEPLOY_WORKFLOW" --ref "$branch"
+          gh pr comment "$PR" --body "Merget efter \"OK merge\" fra @$COMMENTER. Deploy til produktion er startet: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/$DEPLOY_WORKFLOW"
+
+      - name: Merget uden deploy
+        if: steps.check.outputs.skip != 'true' && inputs.deploy-workflow == ''
+        run: gh pr comment "$PR" --body "Merget efter \"OK merge\" fra @$COMMENTER."

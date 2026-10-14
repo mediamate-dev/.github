@@ -1,0 +1,21 @@
+# Kopiér til .github/workflows/ok-merge.yml i kunderepoet.
+# Skriv "OK merge" som kommentar på en Dependabot-PR for at merge og deploye.
+# Godkendere står i repo-variablen OK_MERGE_APPROVERS (Settings › Secrets and variables ›
+# Actions › Variables), adskilt af mellemrum. Logikken ligger i mediamate-dev/.github.
+name: OK merge
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  ok-merge:
+    if: github.event.issue.pull_request
+    uses: mediamate-dev/.github/.github/workflows/ok-merge.yml@main
+    with:
+      approvers: ${{ vars.OK_MERGE_APPROVERS }}

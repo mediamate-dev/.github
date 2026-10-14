@@ -1,0 +1,93 @@
+# MediaMates egne Opengrep-regler: leveringsstandarden (skillen mediamate-web) som kode.
+# Køres sammen med de åbne regler fra opengrep/opengrep-rules af workflows/opengrep.yml.
+#
+# Afprøv en regel lokalt:  opengrep scan -f opengrep/mediamate.yml <repo>
+# Undtag en linje (forklar hvorfor):  // nosemgrep: <regel-id> — <begrundelse>
+rules:
+  - id: mediamate-d1-sql-med-variabel
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      SQL til D1 bygges med en variabel i teksten, ikke med pladsholdere. Værdier skal
+      bindes: .prepare("... WHERE id = ?").bind(id). Er variablen et tabel- eller
+      kolonnenavn fra en fast liste, så skriv det i en nosemgrep-kommentar på linjen.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.prepare(`...${$X}...`)
+          - pattern: $DB.prepare("..." + $X + ...)
+          - pattern: $DB.prepare($X + "...")
+          - pattern: $DB.exec(`...${$X}...`)
+      # Dynamiske pladsholdere (?, ?, ?) er sikre.
+      - pattern-not: $DB.prepare(`...${$L.map(() => "?").join(...)}...`)
+      - pattern-not: $DB.prepare(`...${$L.map(() => '?').join(...)}...`)
+      - metavariable-regex:
+          metavariable: $X
+          regex: (?i)^(?!.*(placeholders?|qs|marks|pladsholdere)$).*
+    metadata: { category: security, cwe: "CWE-89: SQL Injection" }
+
+  - id: mediamate-access-header-uden-jwt
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Brugeren læses fra headeren Cf-Access-Authenticated-User-Email uden at verificere
+      Access-JWT'en. En forespørgsel uden om Access (fx en workers.dev-URL) kan selv sætte
+      headeren. Verificér Cf-Access-Jwt-Assertion, som i webapp-template/src/lib/access.ts.
+    pattern-regex: (?i)["'`]cf-access-authenticated-user-email["'`]
+    metadata: { category: security, cwe: "CWE-290: Authentication Bypass by Spoofing" }
+
+  - id: mediamate-cpr-i-log-eller-mail
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Noget, der ligner et CPR-nummer, logges eller sendes på mail. CPR må aldrig stå i
+      logs eller mails (MediaMates CPR-standard i Hub'ens admin-docs).
+    patterns:
+      - pattern-either:
+          - pattern: console.$LOG(..., $X, ...)
+          - pattern: $ENV.EMAIL.send(...)
+      - pattern-either:
+          - pattern-inside: console.$LOG(..., <... $CPR ...>, ...)
+          - pattern-inside: $ENV.EMAIL.send(<... $CPR ...>)
+      - metavariable-regex:
+          metavariable: $CPR
+          regex: (?i)^(cpr|cprnr|cpr_?nummer|personnummer)\w*$
+    metadata: { category: security, cwe: "CWE-532: Sensitive Information in Log" }
+
+  - id: mediamate-hemmelighed-i-wrangler-vars
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include: ["wrangler.json", "wrangler.jsonc", "wrangler.toml", "**/wrangler.json", "**/wrangler.jsonc", "**/wrangler.toml"]
+    message: >-
+      En hemmelighed ser ud til at stå i klartekst i wrangler-konfigurationen, som ligger i
+      git. Læg den som Worker-secret: npx wrangler secret put <NAVN>.
+    pattern-regex: (?i)["']?[A-Z_]*(SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ADGANGSKODE|KODEORD)[A-Z_]*["']?\s*[:=]\s*["'][^"'\s]{4,}["']
+    metadata: { category: security, cwe: "CWE-798: Hard-coded Credentials" }
+
+  - id: mediamate-resend-udfases
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Resend udfases hos MediaMate. Brug Cloudflare Email Service (send_email-binding,
+      env.EMAIL.send) i den konto, sitet ligger i.
+    pattern-either:
+      - pattern: import $X from "resend"
+      - pattern: import { $X } from "resend"
+      - pattern: fetch("https://api.resend.com/...", ...)
+    metadata: { category: best-practice }
+
+  - id: mediamate-d1-remote-i-script
+    languages: [json]
+    severity: WARNING
+    paths:
+      include: ["package.json", "**/package.json"]
+    message: >-
+      Et npm-script skriver til en live D1-database (--remote). Migrationer mod produktion
+      køres kun af CI før deploy. Skrivninger mod live data kræver et menneskes ja.
+    patterns:
+      - pattern: '"scripts": { ..., $K: $V, ... }'
+      - metavariable-regex:
+          metavariable: $V
+          regex: d1 (execute|migrations apply)[^"]*--remote
+      - focus-metavariable: $V
+    metadata: { category: security }

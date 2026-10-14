@@ -1,0 +1,21 @@
+# Kopiér til .github/workflows/zap.yml i kunderepoet.
+# Ugentlig passiv OWASP ZAP-scanning af produktion. Sæt repo-variablen ZAP_TARGET
+# (Settings › Secrets and variables › Actions › Variables), fx https://www.kunde.dk.
+# Uden ZAP_TARGET springes scanningen over, fx før sitet er flyttet til os.
+name: OWASP ZAP
+
+on:
+  schedule:
+    - cron: "0 2 * * 1" # mandag kl. 03/04 dansk tid
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  zap:
+    if: vars.ZAP_TARGET != ''
+    uses: mediamate-dev/.github/.github/workflows/zap-baseline.yml@main
+    with:
+      target: ${{ vars.ZAP_TARGET }}

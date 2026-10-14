@@ -1,0 +1,40 @@
+# MediaMates standard for Dependabot. Kopiér til .github/dependabot.yml i kunderepoet.
+#
+# - Ugentligt mandag, så aften-gennemgangen har noget at tage stilling til.
+# - cooldown: nye versioner foreslås først, når de har været ude i 7 dage (majors 14).
+#   De fleste ødelagte eller skadelige udgivelser er trukket tilbage inden da.
+#   Sikkerhedsopdateringer venter ikke.
+# - Patch og minor samles i én PR pr. økosystem. Majors kommer hver for sig.
+#
+# Ligger package.json ikke i roden, ret "directories", fx ["/website", "/app"].
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories: ["/"]
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Copenhagen
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    groups:
+      minor-og-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Copenhagen
+    cooldown:
+      default-days: 7
+    labels: [dependencies]
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,0 +1,49 @@
+# Passiv OWASP ZAP-scanning (baseline) af et site.
+#
+# Genbruges fra kunderepos med:
+#   uses: mediamate-dev/.github/.github/workflows/zap-baseline.yml@main
+#
+# Baseline-scanningen crawler sitet i ca. et minut og ser på svarene (headers,
+# cookies, CSP, kendte fejl). Den angriber ikke og sender ingen formularer, så den
+# må køre mod produktion. Fund lander som ét samlet issue i kunderepoet.
+#
+# Kør den kun mod sites, vi selv hoster. Er sitet stadig hos en anden udbyder,
+# lades ZAP_TARGET være tom, så scanningen springes over.
+name: ZAP baseline
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: URL der scannes, fx https://www.kunde.dk
+        type: string
+        required: true
+      rules-file:
+        description: Valgfri regelfil i kunderepoet, fx .zap/rules.tsv (IGNORE/WARN/FAIL pr. regel)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  zap:
+    name: ZAP baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Kun for at kunne læse en eventuel regelfil fra kunderepoet.
+      - uses: actions/checkout@v7
+
+      - name: OWASP ZAP baseline
+        uses: zaproxy/action-baseline@v0.15.0
+        with:
+          target: ${{ inputs.target }}
+          rules_file_name: ${{ inputs.rules-file }}
+          # Spideren må ikke sende formularer (kontakt, tilmelding), heller ikke ved et uheld.
+          cmd_options: '-z "-config spider.postform=false"'
+          issue_title: 'OWASP ZAP: fund på ${{ inputs.target }}'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Fund skal læses af et menneske, ikke stoppe noget.
+          fail_action: false

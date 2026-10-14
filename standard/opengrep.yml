@@ -1,0 +1,15 @@
+# Kopiér til .github/workflows/opengrep.yml i kunderepoet.
+# Logikken og MediaMates egne regler ligger i mediamate-dev/.github.
+name: Opengrep
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  opengrep:
+    uses: mediamate-dev/.github/.github/workflows/opengrep.yml@main

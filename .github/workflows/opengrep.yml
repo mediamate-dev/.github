@@ -1,0 +1,110 @@
+# Opengrep (SAST): læser koden for sikkerhedsfejl ved hver pull request og push.
+#
+# Genbruges fra kunderepos med:
+#   uses: mediamate-dev/.github/.github/workflows/opengrep.yml@main
+#
+# To regelsæt:
+#   1. MediaMates egne regler (opengrep/mediamate.yml i dette repo): leveringsstandarden
+#      som kode, fx SQL i D1, CPR i logs, hemmeligheder i wrangler.jsonc.
+#   2. De åbne sikkerhedsregler fra opengrep/opengrep-rules for JavaScript, TypeScript,
+#      HTML og hemmeligheder.
+#
+# Blokerer kun på sikkerhedsfund med alvor ERROR. Advarsler står i jobbets resumé.
+# På pull requests tæller kun NYE fund (--baseline-commit), så gamle fund i et repo
+# ikke stopper fx en Dependabot-opdatering. Hele repoet scannes ved push til main.
+#
+# Undtag en linje med en kommentar, der forklarer hvorfor:
+#   // nosemgrep: <regel-id> — <begrundelse>
+name: Opengrep
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  # Opdateres med vilje, ikke automatisk. Binæren verificeres med Sigstore.
+  OPENGREP_VERSION: v1.30.2
+  OPENGREP_RULES_SHA: f1d2b562b414783763fd02a6ed2736eaed622efa
+
+jobs:
+  opengrep:
+    name: Opengrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Installér Opengrep (verificeret)
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/opengrep"; mkdir -p "$dir"; cd "$dir"
+          base="https://github.com/opengrep/opengrep/releases/download/$OPENGREP_VERSION"
+          for f in opengrep_manylinux_x86 opengrep_manylinux_x86.sig opengrep_manylinux_x86.cert; do
+            curl -fsSL -o "$f" "$base/$f"
+          done
+          # Binæren skal være signeret af Opengreps egen release-workflow på GitHub.
+          cosign verify-blob opengrep_manylinux_x86 \
+            --signature opengrep_manylinux_x86.sig \
+            --certificate opengrep_manylinux_x86.cert \
+            --certificate-identity-regexp '^https://github\.com/opengrep/opengrep/\.github/workflows/' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          install -m 0755 opengrep_manylinux_x86 "$dir/opengrep"
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Hent regler
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          git clone -q https://github.com/opengrep/opengrep-rules.git rules
+          git -C rules checkout -q "$OPENGREP_RULES_SHA"
+          git clone -q --depth 1 https://github.com/mediamate-dev/.github.git mediamate
+
+      - name: Scan
+        env:
+          BASELINE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+        run: |
+          set -uo pipefail
+          r="$RUNNER_TEMP/rules"
+          args=(scan --quiet --json --output "$RUNNER_TEMP/fund.json"
+            -f "$RUNNER_TEMP/mediamate/opengrep/mediamate.yml"
+            -f "$r/javascript" -f "$r/typescript" -f "$r/html" -f "$r/generic/secrets"
+            --exclude node_modules --exclude dist --exclude .open-next --exclude .next
+            --exclude .wrangler --exclude .astro --exclude test-rapport)
+          if [ -n "$BASELINE" ]; then args+=(--baseline-commit "$BASELINE"); fi
+          opengrep "${args[@]}" .
+          echo "Opengrep sluttede med kode $?"
+
+      - name: Vurdér fund
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          d = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "fund.json")))
+          fund = [r for r in d["results"] if r["extra"].get("metadata", {}).get("category") == "security"]
+          blok = [r for r in fund if r["extra"]["severity"] == "ERROR"]
+          adv = [r for r in fund if r["extra"]["severity"] != "ERROR"]
+          def linje(r):
+              regel = r["check_id"].split(".")[-1]
+              besked = " ".join(r["extra"]["message"].split())[:200]
+              return f"| `{r['path']}:{r['start']['line']}` | `{regel}` | {besked} |"
+          ud = ["## Opengrep", ""]
+          ud.append(f"**{len(blok)} blokerende** (sikkerhed, ERROR) og **{len(adv)} advarsler**.")
+          if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+              ud.append("Kun fund, der er nye i denne pull request.")
+          for titel, liste in (("Blokerende", blok), ("Advarsler", adv)):
+              if liste:
+                  ud += ["", f"### {titel}", "", "| Hvor | Regel | Hvorfor |", "|---|---|---|"]
+                  ud += [linje(r) for r in liste[:100]]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(ud) + "\n")
+          for r in blok:
+              print(f"::error file={r['path']},line={r['start']['line']}::{r['check_id'].split('.')[-1]}: {' '.join(r['extra']['message'].split())}")
+          for r in adv[:50]:
+              print(f"::warning file={r['path']},line={r['start']['line']}::{r['check_id'].split('.')[-1]}: {' '.join(r['extra']['message'].split())}")
+          sys.exit(1 if blok else 0)
+          PY
