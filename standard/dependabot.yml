@@ -21,6 +21,11 @@ updates:
       semver-major-days: 14
     open-pull-requests-limit: 5
     labels: [dependencies]
+    # TypeScript 7 bryder Astros typetjek: @astrojs/check kræver TypeScript 5 eller 6.
+    # Fjern denne undtagelse, når @astrojs/check understøtter TypeScript 7.
+    ignore:
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     groups:
       minor-og-patch:
         update-types: [minor, patch]
